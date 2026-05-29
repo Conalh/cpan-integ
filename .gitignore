@@ -1,0 +1,9 @@
+/blib/
+/local/
+/_build/
+MYMETA.*
+Makefile
+pm_to_blib
+*.bak
+*.old
+cpanfile.integrity
