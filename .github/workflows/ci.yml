@@ -10,7 +10,7 @@ jobs:
     # Parsing / lockfile / reconcile logic — no network, no TLS modules needed.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run offline unit tests
         run: prove -lv t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t t/04-index.t
 
@@ -19,7 +19,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Perl TLS support
         run: sudo apt-get update && sudo apt-get install -y libio-socket-ssl-perl libnet-ssleay-perl
       - name: Run live verification
@@ -32,7 +32,7 @@ jobs:
     # install a module from it with `cpanm --mirror-only` and confirm it loads.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install cpanm and Perl TLS support
         run: sudo apt-get update && sudo apt-get install -y cpanminus libio-socket-ssl-perl libnet-ssleay-perl
       - name: Build a verified mirror from the example snapshot

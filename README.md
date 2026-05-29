@@ -99,28 +99,27 @@ $ echo $?
 
 ## Limitations
 
-- **Install path: verified mirror, e2e not yet CI-validated.** `verify` checks
-  bytes; `fetch --snapshot` materializes a complete local mirror (verified
-  `authors/id/...` artifacts + a `modules/02packages.details.txt.gz` index
-  generated to PAUSE format), so `cpanm --mirror-only` / `cpm --mirror` can
-  install exactly those bytes. The index is written to spec, but a live
-  cpanm/cpm install has not yet been exercised in CI (planned — see Roadmap).
+- **Install path: verified mirror validated in CI.** `fetch --snapshot`
+  materializes a complete local mirror with verified `authors/id/...` artifacts
+  and a PAUSE-format `modules/02packages.details.txt.gz` index. The CI e2e job
+  installs from that mirror with `cpanm --mirror-only` and asserts the installed
+  module loads. This proves the core path: install the exact bytes that were
+  pinned and verified.
 - **CPAN-only.** Non-CPAN snapshot sources (git/url/darkpan) are rejected unless
   `--allow-nonstandard` is given, in which case they are skipped, not verified.
 - **Network required** for `pin` and `verify`.
 
 ## Roadmap
 
-- **Phase 0 (now):** sidecar lockfile, local-bytes hashing + MetaCPAN
+- **Phase 0 (done):** sidecar lockfile, local-bytes hashing + MetaCPAN
   cross-check, snapshot/lock reconciliation, tests.
-- **Phase 1:** richer `verify` constraints (done: missing/extra/nonstandard).
-- **Phase 2 (in progress):** close the preflight→install gap. `fetch`
-  materializes a verified `authors/id/...` mirror; `fetch --snapshot` also emits
-  a `modules/02packages.details.txt.gz` index for drop-in `--mirror-only`
-  resolution. Next: validate end-to-end install against cpanm/cpm in CI, and/or
-  an `install` wrapper that runs the client against the verified mirror.
-- **Phase 3 (optional):** verify Sigstore bundles as a stronger provenance
-  signal, subject to an explicit identity/issuer policy.
+- **Phase 1 (done):** richer `verify` constraints (missing/extra/nonstandard).
+- **Phase 2 (done):** preflight→install gap closed. `fetch --snapshot`
+  materializes a verified `authors/id/...` mirror + `02packages` index; the CI
+  e2e job installs from it with `cpanm --mirror-only` and asserts the module
+  loads.
+- **Phase 3 (optional, deferred):** verify Sigstore bundles as a stronger
+  provenance signal, subject to an explicit identity/issuer policy.
 
 ## Dependencies
 
