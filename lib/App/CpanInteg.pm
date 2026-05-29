@@ -9,7 +9,7 @@ use File::Basename ();
 use File::Path ();
 use Cwd ();
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 
 my $API = 'https://fastapi.metacpan.org/v1';
 
@@ -50,6 +50,7 @@ Usage:
   cpan-integ verify [--integrity cpanfile.integrity] [--snapshot cpanfile.snapshot]
                     [--allow-nonstandard]
   cpan-integ fetch  [--integrity cpanfile.integrity] [--cache cpan-integ-cache]
+                    [--snapshot cpanfile.snapshot]
 
   pin     Download each distribution in a cpanfile.snapshot, hash the bytes
           locally, cross-check against MetaCPAN's published checksum, and write
@@ -58,7 +59,9 @@ Usage:
           --snapshot, also fail if the lock and snapshot do not describe the
           same set of CPAN artifacts.
   fetch   Download and verify each pinned artifact into a local authors/id/...
-          mirror, so cpanm/cpm can install the exact verified bytes offline.
+          mirror so an installer consumes the exact verified bytes. With
+          --snapshot, also emit a modules/02packages index for a drop-in
+          --mirror-only mirror.
 USAGE
     return 0;
 }
@@ -72,15 +75,25 @@ USAGE
 sub parse_snapshot {
     my ($text) = @_;
     my @entries;
+    my ($cur, $section) = (undef, '');
     for my $line (split /\n/, $text) {
-        next unless $line =~ /^\s*pathname:\s*(\S+)/;
-        my $pathname = $1;
-        my ($basename) = $pathname =~ m{([^/]+)\z};
-        push @entries, {
-            pathname => $pathname,
-            basename => $basename,
-            cpan     => ($pathname =~ $CPAN_PATH ? 1 : 0),
-        };
+        if ($line =~ /^\s+pathname:\s*(\S+)/) {
+            my $pathname = $1;
+            my ($basename) = $pathname =~ m{([^/]+)\z};
+            $cur = {
+                pathname => $pathname,
+                basename => $basename,
+                cpan     => ($pathname =~ $CPAN_PATH ? 1 : 0),
+                provides => [],
+            };
+            push @entries, $cur;
+            $section = '';
+        }
+        elsif ($line =~ /^\s+provides:\s*\z/)     { $section = 'provides' }
+        elsif ($line =~ /^\s+requirements:\s*\z/) { $section = 'requirements' }
+        elsif ($cur && $section eq 'provides' && $line =~ /^\s+(\S+)\s+(\S+)\s*\z/) {
+            push @{ $cur->{provides} }, { module => $1, version => $2 };
+        }
     }
     return \@entries;
 }
@@ -134,6 +147,40 @@ sub reconcile {
         for grep { !$in_snap{$_} } sort keys %in_lock;
 
     return @problems;
+}
+
+# Build a PAUSE-style 02packages index from the snapshot's "provides" data,
+# limited to distributions actually present in the (verified) lock. Returns
+# (index_text, module_count). Pass date => "..." for deterministic output.
+sub build_02packages {
+    my ($snap, $lock, %opt) = @_;
+    my %locked = map { $_->{basename} => $_ } @$lock;
+
+    my @rows;
+    for my $d (@$snap) {
+        next unless $d->{cpan};
+        my $le = $locked{$d->{basename}} or next;     # only verified dists
+        my ($relpath) = $le->{url} =~ m{/authors/id/(.+)\z};
+        next unless $relpath;
+        push @rows, [ $_->{module}, $_->{version}, $relpath ] for @{ $d->{provides} || [] };
+    }
+    @rows = sort { $a->[0] cmp $b->[0] } @rows;
+
+    my $body = '';
+    $body .= sprintf "%-32s %s  %s\n", @$_ for @rows;
+
+    my $when = $opt{date} || (scalar(gmtime) . " GMT");
+    my @header = (
+        'File:         02packages.details.txt',
+        'URL:          file://localhost/modules/02packages.details.txt.gz',
+        'Description:  Package names found in directory $CPAN/authors/id',
+        'Columns:      package name, version, path',
+        'Intended-For: Automated fetch routines, namespace documentation.',
+        "Written-By:   cpan-integ $VERSION",
+        'Line-Count:   ' . scalar(@rows),
+        "Last-Updated: $when",
+    );
+    return (join("\n", @header) . "\n\n" . $body, scalar @rows);
 }
 
 # "E/ET/ETHER/Try-Tiny-0.32.tar.gz" -> ("ETHER", "Try-Tiny-0.32")
@@ -306,12 +353,28 @@ sub cmd_verify {
 # unverified cache in place.
 sub cmd_fetch {
     my %o = _parse_argv(
-        { integrity => 'cpanfile.integrity', cache => 'cpan-integ-cache' },
+        { integrity => 'cpanfile.integrity', cache => 'cpan-integ-cache',
+          snapshot  => undef, allow_nonstandard => 0 },
         @_,
     );
 
     -e $o{integrity} or die "cpan-integ: integrity file not found: $o{integrity}\n";
     my $lock = parse_lockfile(_slurp($o{integrity}));
+
+    # With a snapshot we can reconcile the lock and emit a package index for
+    # drop-in --mirror-only name resolution.
+    my $snap;
+    if (defined $o{snapshot}) {
+        -e $o{snapshot} or die "cpan-integ: snapshot not found: $o{snapshot}\n";
+        $snap = parse_snapshot(_slurp($o{snapshot}));
+        my @problems = reconcile($snap, $lock, allow_nonstandard => $o{allow_nonstandard});
+        if (@problems) {
+            print "FAIL  snapshot/lock consistency:\n";
+            print "        - $_\n" for @problems;
+            printf "\ncpan-integ: consistency check failed (%d problem(s))\n", scalar @problems;
+            return 1;
+        }
+    }
 
     my $ua = _ua();
     my ($stored, $fail) = (0, 0);
@@ -349,12 +412,31 @@ sub cmd_fetch {
     die "cpan-integ: fetch aborted — $fail artifact(s) failed download or verification\n"
         if $fail;
 
+    my $indexed = 0;
+    if ($snap) {
+        my ($idx, $count) = build_02packages($snap, $lock);
+        my $idxpath = "$o{cache}/modules/02packages.details.txt.gz";
+        File::Path::make_path("$o{cache}/modules");
+        require IO::Compress::Gzip;
+        IO::Compress::Gzip::gzip(\$idx => $idxpath)
+            or die "cpan-integ: failed to write $idxpath: $IO::Compress::Gzip::GzipError\n";
+        $indexed = $count;
+        print "indexed $count module(s) -> modules/02packages.details.txt.gz\n";
+    }
+
     File::Path::make_path($o{cache}) unless -d $o{cache};
     my $abs = Cwd::abs_path($o{cache});
     print "cpan-integ: stored $stored verified artifact(s) under $o{cache}/authors/id/\n";
-    print "\nThese are the exact bytes 'verify' checked. To install them:\n";
-    print "  cpanm $abs/authors/id/<AUTHORPATH>/<Dist>.tar.gz   # exact verified tarball\n";
-    print "  cpanm --mirror file://$abs --mirror-only <Module>  # mirror mode (also needs a modules/02packages index)\n";
+    if ($indexed) {
+        print "\nComplete verified mirror. Install offline, e.g.:\n";
+        print "  cpanm --mirror file://$abs --mirror-only <Module>\n";
+        print "  cpm install --mirror file://$abs <Module>\n";
+    }
+    else {
+        print "\nVerified bytes stored. Install the exact tarball, e.g.:\n";
+        print "  cpanm $abs/authors/id/<AUTHORPATH>/<Dist>.tar.gz\n";
+        print "  (pass --snapshot to also emit a modules/02packages index for --mirror-only)\n";
+    }
     return 0;
 }
 

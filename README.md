@@ -55,8 +55,8 @@ cpan-integ verify --integrity cpanfile.integrity
 # Stronger: also assert the lock describes exactly the snapshot's artifacts:
 cpan-integ verify --integrity cpanfile.integrity --snapshot cpanfile.snapshot
 
-# Materialize the exact verified bytes into a local authors/id mirror:
-cpan-integ fetch --integrity cpanfile.integrity --cache cpan-integ-cache
+# Build a complete verified local mirror (artifacts + 02packages index):
+cpan-integ fetch --integrity cpanfile.integrity --snapshot cpanfile.snapshot --cache cpan-integ-cache
 ```
 
 `verify` exits non-zero on any mismatch or inconsistency, so it drops straight
@@ -99,11 +99,12 @@ $ echo $?
 
 ## Limitations
 
-- **Preflight, not yet fully install-time.** `verify` checks bytes; `fetch` now
-  stores the verified bytes in a local `authors/id/...` mirror so an installer
-  can consume exactly those bytes (by direct tarball path today). Drop-in
-  `--mirror-only` *name* resolution additionally needs a generated
-  `modules/02packages.details.txt.gz` index — planned (see Roadmap).
+- **Install path: verified mirror, e2e not yet CI-validated.** `verify` checks
+  bytes; `fetch --snapshot` materializes a complete local mirror (verified
+  `authors/id/...` artifacts + a `modules/02packages.details.txt.gz` index
+  generated to PAUSE format), so `cpanm --mirror-only` / `cpm --mirror` can
+  install exactly those bytes. The index is written to spec, but a live
+  cpanm/cpm install has not yet been exercised in CI (planned — see Roadmap).
 - **CPAN-only.** Non-CPAN snapshot sources (git/url/darkpan) are rejected unless
   `--allow-nonstandard` is given, in which case they are skipped, not verified.
 - **Network required** for `pin` and `verify`.
@@ -113,10 +114,11 @@ $ echo $?
 - **Phase 0 (now):** sidecar lockfile, local-bytes hashing + MetaCPAN
   cross-check, snapshot/lock reconciliation, tests.
 - **Phase 1:** richer `verify` constraints (done: missing/extra/nonstandard).
-- **Phase 2 (in progress):** close the preflight→install gap. `fetch` now
-  materializes a verified `authors/id/...` mirror. Next: emit a
-  `modules/02packages.details.txt.gz` index for drop-in `--mirror-only`
-  resolution, and/or an `install` wrapper that runs the client against it.
+- **Phase 2 (in progress):** close the preflight→install gap. `fetch`
+  materializes a verified `authors/id/...` mirror; `fetch --snapshot` also emits
+  a `modules/02packages.details.txt.gz` index for drop-in `--mirror-only`
+  resolution. Next: validate end-to-end install against cpanm/cpm in CI, and/or
+  an `install` wrapper that runs the client against the verified mirror.
 - **Phase 3 (optional):** verify Sigstore bundles as a stronger provenance
   signal, subject to an explicit identity/issuer policy.
 

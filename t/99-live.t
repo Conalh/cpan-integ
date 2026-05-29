@@ -18,6 +18,10 @@ print {$w} <<'SNAP';
 DISTRIBUTIONS
   Try-Tiny-0.32
     pathname: E/ET/ETHER/Try-Tiny-0.32.tar.gz
+    provides:
+      Try::Tiny 0.32
+    requirements:
+      ExtUtils::MakeMaker 0
 SNAP
 close $w;
 
@@ -29,9 +33,12 @@ is App::CpanInteg::cmd_verify('--integrity', $lockf, '--snapshot', $snapf), 0,
     'verify with snapshot consistency returns 0';
 
 my $cache = "$dir/mirror";
-is App::CpanInteg::cmd_fetch('--integrity', $lockf, '--cache', $cache), 0, 'fetch returns 0';
+is App::CpanInteg::cmd_fetch('--integrity', $lockf, '--cache', $cache, '--snapshot', $snapf), 0,
+    'fetch (+index) returns 0';
 ok -s "$cache/authors/id/E/ET/ETHER/Try-Tiny-0.32.tar.gz",
     'verified artifact stored in authors/id mirror layout';
+ok -s "$cache/modules/02packages.details.txt.gz",
+    'package index written for --mirror-only resolution';
 
 # Tamper: corrupt the hash (keep it 64 hex so it still parses).
 my $content = do { open my $r, '<', $lockf; local $/; <$r> };
