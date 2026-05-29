@@ -1,11 +1,14 @@
 # cpan-integ
 
+[![ci](https://github.com/Conalh/cpan-integ/actions/workflows/ci.yml/badge.svg)](https://github.com/Conalh/cpan-integ/actions/workflows/ci.yml)
+
 Consumer-side, install-time **artifact-hash verification** for CPAN.
 
 CPAN workflows can pin *versions* without pinning *bytes*. Carton's
 `cpanfile.snapshot` records the resolved dependency tree and exact versions but
-no artifact digests; `cpm` consumes a snapshot but has no lockfile-integrity
-mode equivalent to pip's hash-checking or npm's lockfile `integrity` field;
+no artifact digests; `cpm` consumes a snapshot but does not appear to provide a
+lockfile-integrity mode equivalent to pip's hash-checking or npm's lockfile
+`integrity` field;
 `cpanm --verify` is off by default and does not verify the integrity of the
 `CHECKSUMS` file itself. `cpan-integ` fills the consumer side: you already
 resolved your dependency graph — this records the SHA-256 of each distribution's
@@ -57,6 +60,9 @@ cpan-integ verify --integrity cpanfile.integrity --snapshot cpanfile.snapshot
 
 # Build a complete verified local mirror (artifacts + 02packages index):
 cpan-integ fetch --integrity cpanfile.integrity --snapshot cpanfile.snapshot --cache cpan-integ-cache
+
+# Install from the verified mirror only (cpanm resolves names via the generated index):
+cpanm --mirror "$PWD/cpan-integ-cache" --mirror-only --installdeps .
 ```
 
 `verify` exits non-zero on any mismatch or inconsistency, so it drops straight
@@ -132,8 +138,30 @@ PURL identity is **format-compatible** with `URI::PackageURL` (not a dependency)
 ## Tests
 
 ```sh
-perl -Ilib t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t   # offline
-CPAN_INTEG_LIVE=1 perl -Ilib t/99-live.t                      # live network
+# offline unit tests (parse / lockfile / reconcile / index):
+prove -lv t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t t/04-index.t
+
+# live network test (pin / verify / fetch / tamper against real CPAN):
+CPAN_INTEG_LIVE=1 perl -Ilib t/99-live.t
+```
+
+End-to-end — build a verified mirror, install from it, and confirm the module
+loads (the shape the CI e2e job runs):
+
+```sh
+perl -Ilib bin/cpan-integ pin \
+  --snapshot examples/cpanfile.snapshot \
+  --out cpanfile.integrity
+
+perl -Ilib bin/cpan-integ fetch \
+  --integrity cpanfile.integrity \
+  --snapshot examples/cpanfile.snapshot \
+  --cache mirror
+
+cpanm --mirror "$PWD/mirror" --mirror-only --notest \
+  --local-lib-contained "$PWD/local-lib" Try::Tiny
+
+perl -I"$PWD/local-lib/lib/perl5" -MTry::Tiny -e 'print Try::Tiny->VERSION, "\n"'
 ```
 
 ## License
