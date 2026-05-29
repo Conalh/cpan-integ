@@ -11,13 +11,16 @@ WriteMakefile(
     MIN_PERL_VERSION => '5.014',
     EXE_FILES        => ['bin/cpan-integ'],
 
-    # Deliberately core-only: a supply-chain tool should not widen its own
-    # attack surface. All of these ship with Perl >= 5.14.
+    # Minimal dependency footprint. Parsing, hashing, and lockfile handling use
+    # core modules; live HTTPS fetching needs Perl TLS support, which is NOT
+    # core. The IO::Socket::SSL / Net::SSLeay versions match HTTP::Tiny's
+    # documented TLS requirements.
     PREREQ_PM => {
-        'HTTP::Tiny'     => 0,
-        'JSON::PP'       => 0,
-        'Digest::SHA'    => 0,
-        'IO::Socket::SSL' => 0,
+        'HTTP::Tiny'      => 0,
+        'JSON::PP'        => 0,
+        'Digest::SHA'     => 0,
+        'IO::Socket::SSL' => '1.56',
+        'Net::SSLeay'     => '1.49',
     },
 
     META_MERGE => {

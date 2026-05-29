@@ -116,10 +116,11 @@ $ echo $?
 
 ## Dependencies
 
-Zero non-core: `HTTP::Tiny`, `JSON::PP`, `Digest::SHA`, `IO::Socket::SSL` — all
-ship with Perl ≥ 5.14. A supply-chain tool should not widen its own attack
-surface. The PURL identity is **format-compatible** with `URI::PackageURL`
-(not a dependency).
+Minimal dependency footprint: parsing, hashing, and lockfile handling use core
+modules where possible. Live HTTPS fetching requires `IO::Socket::SSL` and
+`Net::SSLeay`, matching `HTTP::Tiny`'s TLS requirements — the goal is to avoid
+nonessential dependencies, not to pretend TLS transport is dependency-free. The
+PURL identity is **format-compatible** with `URI::PackageURL` (not a dependency).
 
 ## Tests
 

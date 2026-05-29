@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:   # manual trigger for the live network job
+
+jobs:
+  offline-tests:
+    # Parsing / lockfile / reconcile logic — no network, no TLS modules needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run offline unit tests
+        run: prove -lv t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t
+
+  live-tests:
+    # pin/verify/tamper against real CPAN — manual only (network + TLS deps).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Perl TLS support
+        run: sudo apt-get update && sudo apt-get install -y libio-socket-ssl-perl libnet-ssleay-perl
+      - name: Run live verification
+        env:
+          CPAN_INTEG_LIVE: 1
+        run: prove -lv t/99-live.t
