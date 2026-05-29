@@ -54,6 +54,9 @@ cpan-integ verify --integrity cpanfile.integrity
 
 # Stronger: also assert the lock describes exactly the snapshot's artifacts:
 cpan-integ verify --integrity cpanfile.integrity --snapshot cpanfile.snapshot
+
+# Materialize the exact verified bytes into a local authors/id mirror:
+cpan-integ fetch --integrity cpanfile.integrity --cache cpan-integ-cache
 ```
 
 `verify` exits non-zero on any mismatch or inconsistency, so it drops straight
@@ -96,10 +99,11 @@ $ echo $?
 
 ## Limitations
 
-- **Preflight, not yet install-time.** `verify` re-fetches and checks bytes, but
-  does not yet guarantee that `cpm`/`Carton` installs *those* bytes. Closing
-  that gap (a verified local artifact cache, or client integration) is the
-  target direction — see Roadmap.
+- **Preflight, not yet fully install-time.** `verify` checks bytes; `fetch` now
+  stores the verified bytes in a local `authors/id/...` mirror so an installer
+  can consume exactly those bytes (by direct tarball path today). Drop-in
+  `--mirror-only` *name* resolution additionally needs a generated
+  `modules/02packages.details.txt.gz` index — planned (see Roadmap).
 - **CPAN-only.** Non-CPAN snapshot sources (git/url/darkpan) are rejected unless
   `--allow-nonstandard` is given, in which case they are skipped, not verified.
 - **Network required** for `pin` and `verify`.
@@ -109,8 +113,10 @@ $ echo $?
 - **Phase 0 (now):** sidecar lockfile, local-bytes hashing + MetaCPAN
   cross-check, snapshot/lock reconciliation, tests.
 - **Phase 1:** richer `verify` constraints (done: missing/extra/nonstandard).
-- **Phase 2:** close the preflight→install gap — `fetch` into a
-  content-addressed cache and hand the installer verified bytes.
+- **Phase 2 (in progress):** close the preflight→install gap. `fetch` now
+  materializes a verified `authors/id/...` mirror. Next: emit a
+  `modules/02packages.details.txt.gz` index for drop-in `--mirror-only`
+  resolution, and/or an `install` wrapper that runs the client against it.
 - **Phase 3 (optional):** verify Sigstore bundles as a stronger provenance
   signal, subject to an explicit identity/issuer policy.
 

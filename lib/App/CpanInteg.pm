@@ -5,6 +5,9 @@ use warnings;
 use HTTP::Tiny;
 use JSON::PP ();
 use Digest::SHA qw(sha256_hex);
+use File::Basename ();
+use File::Path ();
+use Cwd ();
 
 our $VERSION = '0.002';
 
@@ -25,6 +28,7 @@ sub run {
 
     return cmd_pin(@argv)    if $cmd eq 'pin';
     return cmd_verify(@argv) if $cmd eq 'verify';
+    return cmd_fetch(@argv)  if $cmd eq 'fetch';
     return cmd_help()        if $cmd =~ /^(?:help|--help|-h)$/;
 
     warn "cpan-integ: unknown command '$cmd'\n\n";
@@ -45,6 +49,7 @@ Usage:
                     [--allow-nonstandard]
   cpan-integ verify [--integrity cpanfile.integrity] [--snapshot cpanfile.snapshot]
                     [--allow-nonstandard]
+  cpan-integ fetch  [--integrity cpanfile.integrity] [--cache cpan-integ-cache]
 
   pin     Download each distribution in a cpanfile.snapshot, hash the bytes
           locally, cross-check against MetaCPAN's published checksum, and write
@@ -52,6 +57,8 @@ Usage:
   verify  Re-fetch each pinned artifact and fail on SHA-256 mismatch. With
           --snapshot, also fail if the lock and snapshot do not describe the
           same set of CPAN artifacts.
+  fetch   Download and verify each pinned artifact into a local authors/id/...
+          mirror, so cpanm/cpm can install the exact verified bytes offline.
 USAGE
     return 0;
 }
@@ -291,6 +298,64 @@ sub cmd_verify {
     }
     printf "\ncpan-integ: %d verified, %d failed, %d total\n", $ok, $fail, scalar @$lock;
     return $fail ? 1 : 0;
+}
+
+# Download + verify each pinned artifact into a local CPAN mirror layout, so an
+# installer consumes the exact bytes we verified (closes the preflight->install
+# gap). Aborts on any download or hash failure rather than leaving a partial,
+# unverified cache in place.
+sub cmd_fetch {
+    my %o = _parse_argv(
+        { integrity => 'cpanfile.integrity', cache => 'cpan-integ-cache' },
+        @_,
+    );
+
+    -e $o{integrity} or die "cpan-integ: integrity file not found: $o{integrity}\n";
+    my $lock = parse_lockfile(_slurp($o{integrity}));
+
+    my $ua = _ua();
+    my ($stored, $fail) = (0, 0);
+    for my $e (@$lock) {
+        my ($relpath) = $e->{url} =~ m{/authors/id/(.+)\z};
+        unless ($relpath) {
+            printf "FAIL  %s  (cannot derive mirror path from %s)\n", $e->{purl}, $e->{url};
+            $fail++;
+            next;
+        }
+
+        my $res = $ua->get($e->{url});
+        unless ($res->{success}) {
+            printf "FAIL  %s  (download error: %s %s)\n", $e->{purl}, $res->{status}, $res->{reason};
+            $fail++;
+            next;
+        }
+
+        my $got = lc sha256_hex($res->{content});
+        unless ($got eq $e->{hash}) {
+            printf "FAIL  %s\n        expected %s\n        got      %s\n", $e->{purl}, $e->{hash}, $got;
+            $fail++;
+            next;
+        }
+
+        my $dest = "$o{cache}/authors/id/$relpath";
+        File::Path::make_path(File::Basename::dirname($dest));
+        open my $fh, '>:raw', $dest or die "cpan-integ: cannot write $dest: $!\n";
+        print {$fh} $res->{content};
+        close $fh;
+        printf "stored %s\n", $relpath;
+        $stored++;
+    }
+
+    die "cpan-integ: fetch aborted — $fail artifact(s) failed download or verification\n"
+        if $fail;
+
+    File::Path::make_path($o{cache}) unless -d $o{cache};
+    my $abs = Cwd::abs_path($o{cache});
+    print "cpan-integ: stored $stored verified artifact(s) under $o{cache}/authors/id/\n";
+    print "\nThese are the exact bytes 'verify' checked. To install them:\n";
+    print "  cpanm $abs/authors/id/<AUTHORPATH>/<Dist>.tar.gz   # exact verified tarball\n";
+    print "  cpanm --mirror file://$abs --mirror-only <Module>  # mirror mode (also needs a modules/02packages index)\n";
+    return 0;
 }
 
 1;

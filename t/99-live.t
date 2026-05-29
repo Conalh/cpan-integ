@@ -28,6 +28,11 @@ is App::CpanInteg::cmd_verify('--integrity', $lockf), 0, 'verify clean lock retu
 is App::CpanInteg::cmd_verify('--integrity', $lockf, '--snapshot', $snapf), 0,
     'verify with snapshot consistency returns 0';
 
+my $cache = "$dir/mirror";
+is App::CpanInteg::cmd_fetch('--integrity', $lockf, '--cache', $cache), 0, 'fetch returns 0';
+ok -s "$cache/authors/id/E/ET/ETHER/Try-Tiny-0.32.tar.gz",
+    'verified artifact stored in authors/id mirror layout';
+
 # Tamper: corrupt the hash (keep it 64 hex so it still parses).
 my $content = do { open my $r, '<', $lockf; local $/; <$r> };
 $content =~ s/sha256:[0-9a-f]{4}/sha256:dead/;
