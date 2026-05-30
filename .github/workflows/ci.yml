@@ -56,7 +56,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cpanminus libio-socket-ssl-perl libnet-ssleay-perl
-          cpanm --notest --quiet App::cpm
+          # Install system-wide so cpm's runtime deps land on the default @INC,
+          # where the patched cpm (run from source) can find them.
+          sudo cpanm --notest --quiet App::cpm
       - name: Clone cpm at the pinned base and apply the in-fetch verify patch
         run: |
           git clone --quiet https://github.com/skaji/cpm /tmp/cpmsrc
@@ -74,7 +76,7 @@ jobs:
             --resolver "+App::CpanInteg::CpmResolver,snapshot=$PWD/examples/cpanfile.snapshot,integrity=$PWD/cpanfile.integrity,mirror=file://$PWD/mirror" \
             --local-lib-contained "$PWD/local-pos" \
             Try::Tiny 2>&1 | tee pos.log
-          grep -rq "Verified sha256:" "$HOME/.perl-cpm" pos.log \
+          grep -rq "Verified sha256:" pos.log "$HOME/.perl-cpm" 2>/dev/null \
             || { echo "FAIL: expected a 'Verified sha256:' line from the patched fetch"; exit 1; }
           perl -I"$PWD/local-pos/lib/perl5" -MTry::Tiny -e 'print "OK: Try::Tiny ", Try::Tiny->VERSION, " installed (verified)\n"'
       - name: "TAMPER: corrupt the mirrored artifact; patched cpm must abort pre-build"
@@ -95,7 +97,7 @@ jobs:
           set -e
           test "$rc" -ne 0 \
             || { echo "FAIL: patched cpm should have exited non-zero on the tampered artifact"; exit 1; }
-          grep -rq "Checksum MISMATCH" "$HOME/.perl-cpm" neg.log \
+          grep -rq "Checksum MISMATCH" neg.log "$HOME/.perl-cpm" 2>/dev/null \
             || { echo "FAIL: expected a 'Checksum MISMATCH' abort in the log"; exit 1; }
           if perl -I"$PWD/local-neg/lib/perl5" -MTry::Tiny -e1 2>/dev/null; then
             echo "FAIL: Try::Tiny was installed despite the tampered artifact"; exit 1
