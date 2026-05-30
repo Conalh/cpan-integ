@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Run offline unit tests
-        run: prove -lv t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t t/04-index.t
+        run: prove -lv t/01-snapshot.t t/02-lockfile.t t/03-reconcile.t t/04-index.t t/05-cpm-resolver.t
 
   live-tests:
     # pin/verify/tamper against real CPAN — manual only (network + TLS deps).
@@ -43,3 +43,101 @@ jobs:
         run: cpanm --mirror "$PWD/mirror" --mirror-only --notest --local-lib-contained "$PWD/local-lib" Try::Tiny
       - name: Assert the module loads from the verified mirror
         run: perl -I"$PWD/local-lib/lib/perl5" -MTry::Tiny -e 'print "Try::Tiny ", Try::Tiny->VERSION, " installed from verified mirror\n"'
+
+  cpm-integrity:
+    # Prove NATIVE install-time enforcement: a patched cpm verifies each
+    # downloaded artifact against the cpan-integ lock during its own fetch and
+    # aborts before build on a mismatch. Stock cpm performs no artifact
+    # verification at all (see integration/cpm/README.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cpanm, Perl TLS support, and App::cpm (for cpm's deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpanminus libio-socket-ssl-perl libnet-ssleay-perl
+          # Install system-wide so cpm's runtime deps land on the default @INC,
+          # where the patched cpm (run from source) can find them.
+          sudo cpanm --notest --quiet App::cpm
+      - name: Clone cpm at the pinned base and apply the in-fetch verify patch
+        run: |
+          git clone --quiet https://github.com/skaji/cpm /tmp/cpmsrc
+          git -C /tmp/cpmsrc checkout --quiet "$(cat integration/cpm/BASE_COMMIT)"
+          git -C /tmp/cpmsrc apply "$PWD/integration/cpm/in-fetch-verify.patch"
+          echo "patched cpm at $(git -C /tmp/cpmsrc rev-parse --short HEAD) + in-fetch verification"
+      - name: Build a verified mirror + lock from the example snapshot
+        run: |
+          perl -Ilib bin/cpan-integ pin --snapshot examples/cpanfile.snapshot --out cpanfile.integrity
+          perl -Ilib bin/cpan-integ fetch --integrity cpanfile.integrity --snapshot examples/cpanfile.snapshot --cache mirror
+      - name: "POSITIVE: patched cpm installs Try::Tiny and logs a verified digest"
+        run: |
+          perl -I/tmp/cpmsrc/lib -I"$PWD/lib" /tmp/cpmsrc/script/cpm install -v \
+            --mirror "file://$PWD/mirror" --mirror-only \
+            --resolver "+App::CpanInteg::CpmResolver,snapshot=$PWD/examples/cpanfile.snapshot,integrity=$PWD/cpanfile.integrity,mirror=file://$PWD/mirror" \
+            --local-lib-contained "$PWD/local-pos" \
+            Try::Tiny 2>&1 | tee pos.log
+          grep -rq "Verified sha256:" pos.log "$HOME/.perl-cpm" 2>/dev/null \
+            || { echo "FAIL: expected a 'Verified sha256:' line from the patched fetch"; exit 1; }
+          # Assert install landed in the contained lib (not just loadable from a
+          # system copy that App::cpm's own deps may have pulled in).
+          test -e "$PWD/local-pos/lib/perl5/Try/Tiny.pm" \
+            || { echo "FAIL: Try::Tiny was not installed into the contained lib"; exit 1; }
+          echo "OK: digest verified and Try::Tiny installed into local-pos"
+      - name: "TAMPER: repack into a VALID tarball with a different hash"
+        run: |
+          set -eo pipefail
+          # Re-pack the real Try-Tiny distribution: still a valid, installable
+          # tar.gz (so the failure can't be blamed on a corrupt archive), but the
+          # bytes -- and thus the SHA-256 -- differ from the pin. This models a
+          # mirror/CDN serving mutated bytes at the same version.
+          tarball=$(find "$PWD/mirror/authors/id" -name 'Try-Tiny-*.tar.gz')
+          orig=$(sha256sum "$tarball" | cut -d' ' -f1)
+          rm -rf /tmp/repack && mkdir /tmp/repack
+          tar xzf "$tarball" -C /tmp/repack
+          distdir=$(basename "$(ls -d /tmp/repack/*/)")
+          echo "repacked for the integrity test" > "/tmp/repack/$distdir/INTEGRITY_TEST.txt"
+          tar czf "$tarball" -C /tmp/repack "$distdir"
+          now=$(sha256sum "$tarball" | cut -d' ' -f1)
+          test "$orig" != "$now" || { echo "FAIL: repack did not change the hash"; exit 1; }
+          # still a valid archive
+          tar tzf "$tarball" >/dev/null || { echo "FAIL: repacked tarball is not a valid archive"; exit 1; }
+          echo "pinned   sha256: $orig"
+          echo "tampered sha256: $now"
+      - name: "CONTROL: STOCK cpm installs the tampered artifact (no verification)"
+        run: |
+          set -eo pipefail
+          rm -rf "$HOME/.perl-cpm"
+          # Installed, UNPATCHED cpm: only $PWD/lib (for the resolver), NOT the
+          # patched /tmp/cpmsrc/lib. Same valid-but-wrong bytes as the patched run.
+          PERL5LIB="$PWD/lib" cpm install -v \
+            --mirror "file://$PWD/mirror" --mirror-only \
+            --resolver "+App::CpanInteg::CpmResolver,snapshot=$PWD/examples/cpanfile.snapshot,integrity=$PWD/cpanfile.integrity,mirror=file://$PWD/mirror" \
+            --local-lib-contained "$PWD/local-stock" \
+            Try::Tiny 2>&1 | tee stock.log
+          test -e "$PWD/local-stock/lib/perl5/Try/Tiny.pm" \
+            || { echo "FAIL: stock cpm should have installed the wrong-hash artifact"; exit 1; }
+          if grep -rq "Checksum MISMATCH" stock.log "$HOME/.perl-cpm" 2>/dev/null; then
+            echo "FAIL: stock cpm is not supposed to have any checksum awareness"; exit 1
+          fi
+          echo "OK (control): stock cpm installed the tampered bytes unverified -- the gap this closes"
+      - name: "PATCHED: cpm refuses the SAME artifact, before build, installs nothing"
+        run: |
+          rm -rf "$HOME/.perl-cpm"
+          set +e
+          perl -I/tmp/cpmsrc/lib -I"$PWD/lib" /tmp/cpmsrc/script/cpm install -v \
+            --mirror "file://$PWD/mirror" --mirror-only \
+            --resolver "+App::CpanInteg::CpmResolver,snapshot=$PWD/examples/cpanfile.snapshot,integrity=$PWD/cpanfile.integrity,mirror=file://$PWD/mirror" \
+            --local-lib-contained "$PWD/local-patched" \
+            Try::Tiny 2>&1 | tee patched.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          test "$rc" -ne 0 \
+            || { echo "FAIL: patched cpm should have exited non-zero on the tampered artifact"; exit 1; }
+          grep -rq "Checksum MISMATCH" patched.log "$HOME/.perl-cpm" 2>/dev/null \
+            || { echo "FAIL: expected a 'Checksum MISMATCH' abort in the log"; exit 1; }
+          # The contained lib's filesystem, not -MTry::Tiny: App::cpm's own deps
+          # put Try::Tiny in the system @INC, so loadability is not proof of install.
+          if [ -e "$PWD/local-patched/lib/perl5/Try/Tiny.pm" ]; then
+            echo "FAIL: patched cpm installed the tampered artifact"; exit 1
+          fi
+          echo "OK: SAME valid bytes -- stock installed them, patched refused them. The patch is the only difference."
