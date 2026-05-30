@@ -78,7 +78,11 @@ jobs:
             Try::Tiny 2>&1 | tee pos.log
           grep -rq "Verified sha256:" pos.log "$HOME/.perl-cpm" 2>/dev/null \
             || { echo "FAIL: expected a 'Verified sha256:' line from the patched fetch"; exit 1; }
-          perl -I"$PWD/local-pos/lib/perl5" -MTry::Tiny -e 'print "OK: Try::Tiny ", Try::Tiny->VERSION, " installed (verified)\n"'
+          # Assert install landed in the contained lib (not just loadable from a
+          # system copy that App::cpm's own deps may have pulled in).
+          test -e "$PWD/local-pos/lib/perl5/Try/Tiny.pm" \
+            || { echo "FAIL: Try::Tiny was not installed into the contained lib"; exit 1; }
+          echo "OK: digest verified and Try::Tiny installed into local-pos"
       - name: "TAMPER: corrupt the mirrored artifact; patched cpm must abort pre-build"
         run: |
           # Overwrite the verified tarball bytes. The lock (and the resolver that
@@ -99,7 +103,10 @@ jobs:
             || { echo "FAIL: patched cpm should have exited non-zero on the tampered artifact"; exit 1; }
           grep -rq "Checksum MISMATCH" neg.log "$HOME/.perl-cpm" 2>/dev/null \
             || { echo "FAIL: expected a 'Checksum MISMATCH' abort in the log"; exit 1; }
-          if perl -I"$PWD/local-neg/lib/perl5" -MTry::Tiny -e1 2>/dev/null; then
+          # Check the contained lib's filesystem, not -MTry::Tiny: App::cpm's own
+          # deps put Try::Tiny in the system @INC, so loadability is not proof of
+          # install. Nothing should have landed in the contained lib.
+          if [ -e "$PWD/local-neg/lib/perl5/Try/Tiny.pm" ]; then
             echo "FAIL: Try::Tiny was installed despite the tampered artifact"; exit 1
           fi
           echo "OK: patched cpm aborted on the tampered artifact, before build, and installed nothing"
